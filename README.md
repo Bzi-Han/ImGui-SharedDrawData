@@ -13,4 +13,4 @@
 1. Server：[src/canvas.cc](https://github.com/Bzi-Han/ImGui-SharedDrawData/blob/main/src/test-ui/main.cc)
 2. Client：[src/render.cc](https://github.com/Bzi-Han/ImGui-SharedDrawData/blob/main/src/test-ui/main.cc)
 
-![screenshot.webm](https://github.com/Bzi-Han/ImGui-SharedDrawData/blob/main/screenshot.webm)
+[screenshot.webm](https://github.com/Bzi-Han/ImGui-SharedDrawData/assets/75075077/6069ebfa-cc19-484c-8879-185b6b878dca)
