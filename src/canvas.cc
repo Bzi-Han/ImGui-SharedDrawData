@@ -91,7 +91,7 @@ void RenderService()
         }
         g_bufferReadLock = false;
 
-        // Wait fot rendering complete
+        // Wait for rendering complete
         {
             std::unique_lock<std::mutex> locker(g_renderingMutex);
 
