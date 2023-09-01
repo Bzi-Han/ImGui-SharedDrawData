@@ -5,12 +5,12 @@
 #include <imgui/backends/imgui_impl_glfw.h>
 #include <imgui/backends/imgui_impl_opengl3.h>
 #include <GLFW/glfw3.h>
-
-#include <afunix.h>
+#include <WS2tcpip.h>
 
 #include <iostream>
+#include <thread>
 
-SOCKET g_dataFd{};
+SOCKET g_dataFd = INVALID_SOCKET;
 
 void ConnectToRenderService()
 {
@@ -21,17 +21,18 @@ void ConnectToRenderService()
         exit(0);
     }
 
-    g_dataFd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    g_dataFd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (INVALID_SOCKET == g_dataFd)
     {
         std::cout << "[-] Create socket fd failed" << std::endl;
         exit(0);
     }
 
-    sockaddr_un info{};
-    info.sun_family = AF_UNIX;
-    strcpy_s(info.sun_path, "socket.RenderService");
-    if (0 != ::connect(g_dataFd, reinterpret_cast<sockaddr *>(&info), sizeof(sockaddr_un)))
+    sockaddr_in info{};
+    info.sin_family = AF_INET;
+    inet_pton(AF_INET, "127.0.0.1", &info.sin_addr);
+    info.sin_port = htons(16888);
+    if (0 != ::connect(g_dataFd, reinterpret_cast<sockaddr *>(&info), sizeof(info)))
     {
         std::cout << "[-] Connect render service failed" << std::endl;
         exit(0);
@@ -91,7 +92,9 @@ int main()
     }
 
     auto &imguiIO = ImGui::GetIO();
+
     imguiIO.IniFilename = nullptr;
+    imguiIO.MouseDrawCursor = true;
 
     ImFontConfig fontConfig;
     fontConfig.SizePixels = 22.f;
@@ -110,6 +113,10 @@ int main()
         std::cout << "[-] ImGui init OpenGL3 failed" << std::endl;
         return 1;
     }
+
+    // Send shared font data
+    auto sharedFontData = ImGui::GetSharedFontData();
+    SendToRender(sharedFontData);
 
     // Render data
     while (!glfwWindowShouldClose(window))
@@ -167,7 +174,10 @@ int main()
         ImGui::Render();
         const auto &sharedData = ImGui::GetSharedDrawData();
         if (!sharedData.empty())
+        {
             SendToRender(sharedData);
+            std::this_thread::sleep_for(std::chrono::milliseconds(16));
+        }
     }
 
     // Cleanup

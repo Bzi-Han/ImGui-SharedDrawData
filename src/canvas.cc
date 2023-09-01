@@ -6,8 +6,6 @@
 #include <imgui/backends/imgui_impl_opengl3.h>
 #include <GLFW/glfw3.h>
 
-#include <afunix.h>
-
 #include <iostream>
 #include <iomanip>
 #include <thread>
@@ -15,12 +13,39 @@
 #include <condition_variable>
 #include <filesystem>
 
-std::atomic_bool g_bufferReadLock = false;
-std::vector<uint8_t> g_sharedDrawData;
+enum class RenderState
+{
+    SetFont,
+    Rendering,
+    ReadData,
+};
+
+std::atomic<RenderState> g_renderState = RenderState::ReadData;
+std::vector<uint8_t> g_sharedFontData;
+std::vector<uint8_t> g_sharedDrawData, g_sharedDrawDataBack;
+
 bool g_work = true;
 size_t g_maxPacketSize = 1 * 1024 * 1024; // 1MB
-std::mutex g_renderingMutex;
-std::condition_variable g_renderCompleteSignal;
+SOCKET g_dataFd = INVALID_SOCKET;
+
+int ReadData(void *buffer, size_t readSize)
+{
+    size_t packetReaded = 0;
+
+    while (packetReaded < readSize)
+    {
+        auto readResult = ::recv(g_dataFd, reinterpret_cast<char *>(buffer) + packetReaded, static_cast<int>(readSize - packetReaded), 0);
+        if (0 >= readResult)
+            return readResult;
+        packetReaded += readResult;
+    }
+
+    return static_cast<int>(packetReaded);
+}
+void WriteData(void *data, size_t size)
+{
+    ::send(g_dataFd, reinterpret_cast<char *>(data), static_cast<int>(size), 0);
+}
 
 void RenderService()
 {
@@ -31,71 +56,75 @@ void RenderService()
         exit(0);
     }
 
-    auto fd = ::socket(AF_UNIX, SOCK_STREAM, 0);
+    auto fd = ::socket(AF_INET, SOCK_STREAM, IPPROTO_TCP);
     if (INVALID_SOCKET == fd)
     {
         std::cout << "[-] Create socket fd failed" << std::endl;
         exit(0);
     }
 
-    sockaddr_un info{};
-    info.sun_family = AF_UNIX;
-    strcpy_s(info.sun_path, "socket.RenderService");
-    std::filesystem::remove("socket.RenderService");
-    if (SOCKET_ERROR == ::bind(fd, reinterpret_cast<sockaddr *>(&info), sizeof(sockaddr_un)))
+    sockaddr_in info{};
+    info.sin_family = AF_INET;
+    info.sin_addr.S_un.S_addr = ADDR_ANY;
+    info.sin_port = htons(16888);
+    if (SOCKET_ERROR == ::bind(fd, reinterpret_cast<sockaddr *>(&info), sizeof(info)))
     {
         std::cout << "[-] Bind socket fd failed" << std::endl;
         exit(0);
     }
 
-    if (SOCKET_ERROR == ::listen(fd, 0))
+    if (SOCKET_ERROR == ::listen(fd, 1))
     {
         std::cout << "[-] Listen socket fd failed" << std::endl;
         exit(0);
     }
 
-    auto dataFd = ::accept(fd, nullptr, nullptr);
-    if (INVALID_SOCKET == dataFd)
-    {
-        std::cout << "[-] Accept returned invalid socket fd" << std::endl;
-        exit(0);
-    }
-
-    uint32_t packetSize = 0, packetReaded = 0;
     while (g_work)
     {
-        if (static_cast<int>(sizeof(packetSize)) > ::recv(dataFd, reinterpret_cast<char *>(&packetSize), sizeof(packetSize), 0))
+        g_dataFd = INVALID_SOCKET;
+        g_sharedFontData.clear();
+        g_dataFd = ::accept(fd, nullptr, nullptr);
+        if (INVALID_SOCKET == g_dataFd)
         {
-            std::cout << "[-] Can not read packet size: " << ::WSAGetLastError() << std::endl;
-            break;
-        }
-        if (packetSize > g_maxPacketSize)
-        {
-            std::cout << "[-] Packet is too large: " << std::setprecision(2) << std::fixed << (packetSize / 1024.f / 1024.f) << std::endl;
-            break;
+            std::cout << "[-] Accept returned invalid socket fd" << std::endl;
+            exit(0);
         }
 
-        g_bufferReadLock = true;
-        if (g_sharedDrawData.size() < packetSize)
-            g_sharedDrawData.resize(packetSize);
-        packetReaded = 0;
-        while (packetReaded < packetSize)
+        uint32_t packetSize = 0, packetReaded = 0;
+        while (g_work)
         {
-            auto readResult = ::recv(dataFd, reinterpret_cast<char *>(g_sharedDrawData.data() + packetReaded), packetSize - packetReaded, 0);
+            if (static_cast<int>(sizeof(packetSize)) > ReadData(&packetSize, sizeof(packetSize)))
+            {
+                std::cout << "[-] Can not read packet size: " << ::WSAGetLastError() << std::endl;
+                break;
+            }
+            if (packetSize > g_maxPacketSize)
+            {
+                std::cout << "[-] Packet is too large: " << std::setprecision(2) << std::fixed << (packetSize / 1024.f / 1024.f) << std::endl;
+                break;
+            }
+
+            if (g_sharedDrawDataBack.size() < packetSize)
+                g_sharedDrawDataBack.resize(packetSize);
+            auto readResult = ReadData(g_sharedDrawDataBack.data(), packetSize);
             if (0 >= readResult)
             {
-                std::cout << "[-] Client disconnect or read failed: " << readResult << std::endl;
-                exit(0);
+                std::cout << "[-] Client disconnect or read failed, readResult:" << readResult << std::endl;
+                break;
             }
-            packetReaded += readResult;
-        }
-        g_bufferReadLock = false;
 
-        // Wait for rendering complete
-        {
-            std::unique_lock<std::mutex> locker(g_renderingMutex);
-
-            g_renderCompleteSignal.wait(locker);
+            if (RenderState::Rendering == g_renderState)
+                continue;
+            if (g_sharedFontData.empty()) // NOTE: First packet is font data
+            {
+                g_sharedFontData.swap(g_sharedDrawDataBack);
+                g_renderState = RenderState::SetFont;
+            }
+            else
+            {
+                g_sharedDrawData.swap(g_sharedDrawDataBack);
+                g_renderState = RenderState::Rendering;
+            }
         }
     }
 
@@ -142,12 +171,8 @@ int main()
     }
 
     auto &imguiIO = ImGui::GetIO();
+
     imguiIO.IniFilename = nullptr;
-
-    ImFontConfig fontConfig;
-    fontConfig.SizePixels = 22.f;
-    imguiIO.Fonts->AddFontDefault(&fontConfig);
-
     ImGui::StyleColorsDark();
     ImGui::GetStyle().ScaleAllSizes(3.f);
 
@@ -182,17 +207,30 @@ int main()
         ImGui_ImplOpenGL3_NewFrame();
         ImGui_ImplGlfw_NewFrame();
 
-        // Rendering
-        if (!g_bufferReadLock)
+        switch (g_renderState)
+        {
+        case RenderState::SetFont:
+        {
+            ImGui_ImplOpenGL3_DestroyFontsTexture();
+            ImGui::SetSharedFontData(g_sharedFontData);
+            ImGui_ImplOpenGL3_CreateFontsTexture();
+            break;
+        }
+        case RenderState::Rendering:
         {
             auto sharedData = ImGui::RenderSharedDrawData(g_sharedDrawData);
             if (nullptr != sharedData)
             {
                 glClear(GL_COLOR_BUFFER_BIT);
                 ImGui_ImplOpenGL3_RenderDrawData(sharedData);
-                g_renderCompleteSignal.notify_one();
                 glfwSwapBuffers(window);
             }
+            g_renderState = RenderState::ReadData;
+
+            break;
+        }
+        default:
+            break;
         }
     }
 

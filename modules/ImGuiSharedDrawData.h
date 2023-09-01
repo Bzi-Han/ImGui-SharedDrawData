@@ -11,6 +11,72 @@
 
 namespace ImGui
 {
+    std::vector<uint8_t> GetSharedFontData()
+    {
+        auto &imguiIO = ImGui::GetIO();
+
+        std::vector<uint8_t> sharedFontData;
+        uint8_t *pixelData = nullptr;
+        int width = 0, height = 0;
+
+        auto WriteData = [&](void *data, size_t size)
+        {
+            auto begin = reinterpret_cast<uint8_t *>(data);
+            auto end = begin + size;
+            sharedFontData.insert(sharedFontData.end(), begin, end);
+        };
+
+        imguiIO.Fonts->GetTexDataAsAlpha8(&pixelData, &width, &height);
+        if (1 > width || 1 > height)
+            return sharedFontData;
+
+        // Write width
+        WriteData(&width, sizeof(width));
+        // Write height
+        WriteData(&height, sizeof(height));
+        // Write data
+        WriteData(pixelData, width * height);
+
+        return sharedFontData;
+    }
+
+    void SetSharedFontData(const std::vector<uint8_t> &data)
+    {
+        auto &imguiIO = ImGui::GetIO();
+
+        if (data.empty() || 8 > data.size())
+            return;
+        if (!imguiIO.Fonts->IsBuilt())
+        {
+            if (!imguiIO.Fonts->Build())
+                return;
+        }
+
+        size_t readIndex = 0;
+        int originDataSize = imguiIO.Fonts->TexWidth * imguiIO.Fonts->TexHeight;
+
+        // Read width
+        memcpy(&imguiIO.Fonts->TexWidth, data.data() + readIndex, sizeof(imguiIO.Fonts->TexWidth));
+        readIndex += sizeof(imguiIO.Fonts->TexWidth);
+        // Read height
+        memcpy(&imguiIO.Fonts->TexHeight, data.data() + readIndex, sizeof(imguiIO.Fonts->TexHeight));
+        readIndex += sizeof(imguiIO.Fonts->TexHeight);
+        // Read data
+        int newDataSize = imguiIO.Fonts->TexWidth * imguiIO.Fonts->TexHeight;
+        if (originDataSize < newDataSize)
+        {
+            IM_FREE(imguiIO.Fonts->TexPixelsAlpha8);
+            imguiIO.Fonts->TexPixelsAlpha8 = reinterpret_cast<uint8_t *>(IM_ALLOC(newDataSize));
+        }
+        memcpy(imguiIO.Fonts->TexPixelsAlpha8, data.data() + readIndex, newDataSize);
+
+        if (nullptr != imguiIO.Fonts->TexPixelsRGBA32)
+        {
+            IM_FREE(imguiIO.Fonts->TexPixelsRGBA32);
+            imguiIO.Fonts->TexPixelsRGBA32 = nullptr;
+        }
+    }
+
     const std::vector<uint8_t> &GetSharedDrawData()
     {
         static std::vector<uint8_t> sharedDrawData;
