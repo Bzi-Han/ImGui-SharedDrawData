@@ -113,7 +113,7 @@ void RenderService()
                 break;
             }
 
-            if (RenderState::Rendering == g_renderState)
+            if (RenderState::ReadData != g_renderState)
                 continue;
             if (g_sharedFontData.empty()) // NOTE: First packet is font data
             {
@@ -214,6 +214,8 @@ int main()
             ImGui_ImplOpenGL3_DestroyFontsTexture();
             ImGui::SetSharedFontData(g_sharedFontData);
             ImGui_ImplOpenGL3_CreateFontsTexture();
+            g_renderState = RenderState::ReadData;
+
             break;
         }
         case RenderState::Rendering:
